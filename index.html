@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#111111">
+<title>Tee Swipe</title>
+<style>
+  :root { --bg:#111; --card:#1c1c1c; --fg:#f2f2f2; --dim:#8a8a8a; --yes:#2ecc71; --no:#ff4d4d; --acc:#ffd23f; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font:15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overscroll-behavior:none; }
+  body { display:flex; flex-direction:column; padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  header { display:flex; align-items:center; justify-content:space-between; padding:10px 16px; gap:8px; }
+  header .stat { color:var(--dim); font-size:13px; }
+  header b { color:var(--fg); }
+  button { font:inherit; color:var(--fg); background:#2a2a2a; border:0; border-radius:999px; padding:8px 14px; cursor:pointer; }
+  button:active { transform:scale(.96); }
+  .done-btn { background:var(--acc); color:#111; font-weight:600; }
+  #stage { position:relative; flex:1; margin:0 14px; }
+  .card { position:absolute; inset:0; background:var(--card); border-radius:18px; overflow:hidden;
+    display:flex; flex-direction:column; touch-action:none; user-select:none; will-change:transform;
+    transition:transform .25s ease, opacity .25s ease; box-shadow:0 8px 30px rgba(0,0,0,.5); }
+  .card.under { transform:scale(.95) translateY(10px); opacity:.6; pointer-events:none; }
+  .card .img { flex:1; background:#fff center/contain no-repeat; min-height:0; }
+  .card .info { padding:12px 14px 14px; }
+  .card .title { font-weight:600; font-size:17px; }
+  .card .meta { color:var(--dim); font-size:13px; margin-top:2px; }
+  .card .price { margin-top:6px; font-size:16px; }
+  .card .price s { color:var(--dim); margin-left:6px; }
+  .card .price .off { color:var(--acc); margin-left:8px; font-weight:600; }
+  .card a.open { position:absolute; top:10px; right:10px; background:rgba(0,0,0,.6); color:#fff;
+    text-decoration:none; padding:6px 10px; border-radius:999px; font-size:13px; }
+  .badge { position:absolute; top:22px; padding:6px 14px; border:3px solid; border-radius:10px;
+    font-weight:800; font-size:26px; letter-spacing:1px; opacity:0; transform:rotate(-12deg); background:rgba(0,0,0,.35); }
+  .badge.yes { left:18px; color:var(--yes); border-color:var(--yes); }
+  .badge.no { right:18px; color:var(--no); border-color:var(--no); transform:rotate(12deg); }
+  .controls { display:flex; justify-content:center; align-items:center; gap:22px; padding:14px 0 10px; }
+  .round-btn { width:64px; height:64px; border-radius:50%; font-size:28px; padding:0; background:#222; }
+  .round-btn.no { color:var(--no); } .round-btn.yes { color:var(--yes); }
+  .round-btn.small { width:46px; height:46px; font-size:18px; color:var(--dim); }
+  .panel { flex:1; overflow:auto; padding:8px 16px 24px; }
+  .panel h2 { margin:8px 0 4px; }
+  .panel p { color:var(--dim); margin:6px 0 14px; }
+  .row { display:flex; gap:12px; align-items:center; padding:8px 0; border-bottom:1px solid #222; color:var(--fg); text-decoration:none; }
+  .row img { width:64px; height:64px; object-fit:contain; background:#fff; border-radius:8px; flex:none; }
+  .row .t { font-weight:600; } .row .m { color:var(--dim); font-size:13px; }
+  .actions { display:flex; flex-wrap:wrap; gap:10px; margin:14px 0; }
+  .msg { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; color:var(--dim); padding:20px; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="stat" id="stat">Loading…</div>
+  <button class="done-btn" id="doneBtn">Done</button>
+</header>
+
+<div id="swipeView" style="display:flex;flex-direction:column;flex:1;min-height:0">
+  <div id="stage"></div>
+  <div class="controls">
+    <button class="round-btn small" id="undoBtn" aria-label="Undo">↶</button>
+    <button class="round-btn no" id="noBtn" aria-label="Pass">✕</button>
+    <button class="round-btn yes" id="yesBtn" aria-label="Keep">♥</button>
+    <button class="round-btn small" id="restartBtn" aria-label="Start over">⟲</button>
+  </div>
+</div>
+
+<div id="resultView" class="panel hidden"></div>
+
+<script>
+// ---- Settings ----
+const EMAIL_TO = "";   // Put your email address here, e.g. "you@example.com"
+const STATE_KEY = "teeSwipeState.v1";
+
+// ---- Storage helpers (storage can fail in some browsers) ----
+function loadState() { try { return JSON.parse(localStorage.getItem(STATE_KEY)); } catch { return null; } }
+function saveState() { try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch {} }
+
+let data = null, byId = {}, state = null;
+const $ = id => document.getElementById(id);
+const stage = $("stage");
+
+// ---- Load shirts.json ----
+// On GitHub Pages, read the file from raw.githubusercontent.com so new data
+// shows at once, without a wait for a Pages rebuild. Use ./shirts.json as fallback.
+function dataUrls() {
+  const urls = [];
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/i);
+  const repo = location.pathname.split("/").filter(Boolean)[0];
+  if (m && repo) urls.push(`https://raw.githubusercontent.com/${m[1]}/${repo}/main/shirts.json?t=${Date.now()}`);
+  urls.push(`shirts.json?t=${Date.now()}`);
+  return urls;
+}
+
+async function loadData() {
+  for (const u of dataUrls()) {
+    try { const r = await fetch(u, { cache: "no-store" }); if (r.ok) return await r.json(); } catch {}
+  }
+  return null;
+}
+
+function freshState() {
+  return { generated: data.generated, round: 1, pool: data.shirts.map(s => s.id), idx: 0, keep: [], history: [], finished: false };
+}
+
+async function init() {
+  data = await loadData();
+  if (!data || !Array.isArray(data.shirts)) {
+    $("stat").textContent = "No data";
+    stage.innerHTML = `<div class="msg"><h3>No shirts yet</h3><p>Open the Actions tab in your GitHub repo and run “Collect shirts”. Then reload this page.</p></div>`;
+    return;
+  }
+  data.shirts.forEach(s => byId[s.id] = s);
+  state = loadState();
+  if (!state || !Array.isArray(state.pool)) state = freshState();
+  // Drop shirts that are no longer in the data (sold out / sale ended).
+  state.pool = state.pool.filter(id => byId[id]);
+  state.keep = state.keep.filter(id => byId[id]);
+  state.idx = Math.min(state.idx, state.pool.length);
+  saveState();
+  if (state.finished) showResults(); else render();
+}
+
+// ---- Rounds ----
+// Round 1: only the shirts you kept. Later rounds: kept + not yet judged
+// (those already survived an earlier round).
+function finalists() { return state.round === 1 ? state.keep.slice() : state.keep.concat(state.pool.slice(state.idx)); }
+
+function decide(liked) {
+  if (state.idx >= state.pool.length) return;
+  const id = state.pool[state.idx];
+  state.history.push({ id, liked, round: state.round });
+  if (liked) state.keep.push(id);
+  state.idx++;
+  if (state.idx >= state.pool.length) endRound();
+  saveState();
+}
+
+function endRound() {
+  if (state.keep.length <= 1) return showResults(state.keep.slice());
+  state.round++;
+  state.pool = state.keep;
+  state.keep = [];
+  state.idx = 0;
+  state.history = [];   // undo works inside a round only
+  render();
+}
+
+function undo() {
+  const last = state.history.pop();
+  if (!last) return;
+  if (last.liked) state.keep.pop();
+  state.idx--;
+  saveState();
+  render();
+}
+
+function restart() {
+  if (!confirm("Start over with today's shirts?")) return;
+  state = freshState();
+  saveState();
+  $("resultView").classList.add("hidden");
+  $("swipeView").classList.remove("hidden");
+  render();
+}
+
+// ---- Render swipe cards ----
+function cardHtml(s) {
+  const img = s.image ? s.image + (s.image.includes("?") ? "&" : "?") + "width=800" : "";
+  const also = s.also_at && s.also_at.length ? ` · also at ${s.also_at.length} more` : "";
+  return `<div class="img" style="background-image:url('${img.replace(/'/g, "%27")}')"></div>
+    <a class="open" href="${s.url}" target="_blank" rel="noopener">Open ↗</a>
+    <div class="badge yes">KEEP</div><div class="badge no">NOPE</div>
+    <div class="info">
+      <div class="title">${esc(s.title)}</div>
+      <div class="meta">${esc(s.vendor)} · ${esc(s.store)}${also}</div>
+      <div class="price">$${s.price.toFixed(2)}<s>$${s.was.toFixed(2)}</s><span class="off">-${s.off}%</span></div>
+    </div>`;
+}
+
+function esc(t) { return String(t ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+
+function render() {
+  if (state.finished) return showResults();
+  const left = state.pool.length - state.idx;
+  $("stat").innerHTML = `Round <b>${state.round}</b> · ${state.idx + 1 > state.pool.length ? state.pool.length : state.idx + 1}/<b>${state.pool.length}</b> · kept <b>${state.keep.length}</b>`;
+  stage.innerHTML = "";
+  if (!state.pool.length) {
+    stage.innerHTML = `<div class="msg"><h3>No shirts match today</h3><p>No size M T-shirts on sale right now.</p></div>`;
+    return;
+  }
+  const next = state.pool[state.idx + 1];
+  if (next) { const u = document.createElement("div"); u.className = "card under"; u.innerHTML = cardHtml(byId[next]); stage.appendChild(u); }
+  const cur = state.pool[state.idx];
+  if (!cur) return;
+  const c = document.createElement("div");
+  c.className = "card";
+  c.innerHTML = cardHtml(byId[cur]);
+  stage.appendChild(c);
+  attachDrag(c);
+  // Preload the image after next.
+  const pre = state.pool[state.idx + 2];
+  if (pre && byId[pre].image) { const i = new Image(); i.src = byId[pre].image; }
+}
+
+function fling(card, liked) {
+  const w = window.innerWidth;
+  card.style.transition = "transform .25s ease, opacity .25s ease";
+  card.style.transform = `translateX(${liked ? w * 1.3 : -w * 1.3}px) rotate(${liked ? 25 : -25}deg)`;
+  card.style.opacity = "0";
+  setTimeout(() => { decide(liked); if (!state.finished) render(); }, 200);
+}
+
+function attachDrag(card) {
+  let startX = 0, startY = 0, dx = 0, dragging = false;
+  const yes = card.querySelector(".badge.yes"), no = card.querySelector(".badge.no");
+  card.addEventListener("pointerdown", e => {
+    if (e.target.closest("a")) return;
+    dragging = true; startX = e.clientX; startY = e.clientY; dx = 0;
+    card.setPointerCapture(e.pointerId);
+    card.style.transition = "none";
+  });
+  card.addEventListener("pointermove", e => {
+    if (!dragging) return;
+    dx = e.clientX - startX;
+    const dy = (e.clientY - startY) * 0.2;
+    card.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx / 18}deg)`;
+    yes.style.opacity = Math.max(0, Math.min(1, dx / 100));
+    no.style.opacity = Math.max(0, Math.min(1, -dx / 100));
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    if (Math.abs(dx) > 90) return fling(card, dx > 0);
+    card.style.transition = "transform .2s ease";
+    card.style.transform = "";
+    yes.style.opacity = no.style.opacity = 0;
+  };
+  card.addEventListener("pointerup", end);
+  card.addEventListener("pointercancel", end);
+}
+
+function swipeButton(liked) {
+  const c = stage.querySelector(".card:not(.under)");
+  if (c) fling(c, liked);
+}
+
+// ---- Results + email ----
+function showResults(ids) {
+  if (ids) state.final = ids;
+  else if (!state.finished) state.final = finalists();
+  state.finished = true;
+  const list = (state.final || []).map(id => byId[id]).filter(Boolean);
+  saveState();
+  $("swipeView").classList.add("hidden");
+  const v = $("resultView");
+  v.classList.remove("hidden");
+  $("stat").innerHTML = `Finished · <b>${list.length}</b> shirt${list.length === 1 ? "" : "s"}`;
+  v.innerHTML = `<h2>Your finalists</h2>
+    <p>${list.length ? "These shirts survived. Tap one to open it." : "No shirts survived."}</p>
+    <div class="actions">
+      ${list.length ? `<button class="done-btn" id="mailBtn">Email me</button><button id="copyBtn">Copy links</button>` : ""}
+      <button id="againBtn">Start over</button>
+    </div>
+    ${list.map(s => `<a class="row" href="${s.url}" target="_blank" rel="noopener">
+        <img src="${s.image || ""}" alt=""><div><div class="t">${esc(s.title)}</div>
+        <div class="m">${esc(s.store)} · $${s.price.toFixed(2)} (was $${s.was.toFixed(2)})</div></div></a>`).join("")}`;
+  const text = list.map(s => `${s.title} — ${s.store} — $${s.price.toFixed(2)} (was $${s.was.toFixed(2)})\n${s.url}`).join("\n\n");
+  const mb = $("mailBtn");
+  if (mb) mb.onclick = () => {
+    const subj = `Tee Swipe finalists (${list.length})`;
+    location.href = `mailto:${encodeURIComponent(EMAIL_TO)}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(text)}`;
+  };
+  const cb = $("copyBtn");
+  if (cb) cb.onclick = async () => { try { await navigator.clipboard.writeText(text); cb.textContent = "Copied"; } catch { cb.textContent = "Copy failed"; } };
+  $("againBtn").onclick = restart;
+}
+
+$("yesBtn").onclick = () => swipeButton(true);
+$("noBtn").onclick = () => swipeButton(false);
+$("undoBtn").onclick = undo;
+$("restartBtn").onclick = restart;
+$("doneBtn").onclick = () => { if (state && !state.finished) showResults(); };
+document.addEventListener("keydown", e => {
+  if (e.key === "ArrowRight") swipeButton(true);
+  if (e.key === "ArrowLeft") swipeButton(false);
+  if (e.key === "Backspace") undo();
+});
+
+init();
+</script>
+</body>
+</html>
